@@ -10,15 +10,81 @@ service: uploads
 # The `provider` block defines where your service will be deployed
 provider:
   name: aws
-  runtime: nodejs12.x
+  runtime: python3.7
   region: us-east-1
   stage: dev
 
+plugins:
+  - serverless-python-requirements
+  - serverless-package-python-functions
+
 custom:
   stage: ${opt:stage, self:provider.stage}
+  pkgPyFuncs: # plugin configuration
+    buildDir: _build
+    requirementsFile: 'requirements.txt'
+    globalRequirements:
+      - ./requirements.txt
+    globalIncludes:
+      - ./lambda/common.py
+    cleanup: true
+
+functions: 
+  avUpdate:
+    handler: lambda/update.lambda_handler
+    events:
+      - schedule: rate(3 hours)
+    role: BucketAVUpdateRole
+    timeout: 300 # 300 seconds = 5 minutes
+    memorySize: 1024
+    package:
+      include:
+        - ./lambda/clamav.py
+      artifact: ${self:custom.pkgPyFuncs.buildDir}/avUpdate.zip
+    environment: 
+      AV_DEFINITION_S3_BUCKET: !GetAtt AVBucket.Arn
 
 resources:
   Resources:
+    AVBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: serverless-av-${opt:stage, self:provider.stage}
+        AccessControl: PublicRead
+    BucketAVUpdateRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: 'Allow'
+              Principal:
+                Service: 'lambda.amazonaws.com'
+              Action: 'sts:AssumeRole'
+        Policies:
+          - PolicyName: 'BucketAVUpdateRolePolicy'
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+              - Effect: 'Allow'
+                Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: 'Allow'
+                Action:
+                - s3:GetObject
+                - s3:GetObjectTagging
+                - s3:PutObject
+                - s3:PutObjectTagging
+                - s3:PutObjectVersionTagging
+                - s3:ListBucket
+                Resource: !Join [ "/", [ !GetAtt AVBucket.Arn, '*'] ]
+              - Effect: 'Allow'
+                Action:
+                - s3:ListBucket
+                Resource: !GetAtt AVBucket.Arn
     AttachmentsBucket:
       Type: AWS::S3::Bucket
       Properties:
